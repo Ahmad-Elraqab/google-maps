@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Map with Selectable Polygons - Single Color</title>
+    <style>
+        /* Essential to make the map fill the container */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+        /* Style for the overlay display */
+        #status-overlay {
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            background: white; 
+            padding: 10px; 
+            border: 1px solid #ccc; 
+            z-index: 100;
+            font-family: Arial, sans-serif;
+            border-radius: 4px;
+        }
+        #selected-list {
+            font-weight: bold;
+            color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div id="status-overlay">
+        Current Selected IDs: <span id="selected-list">None</span>
+    </div>
+
+    <script>
+        // --- APPLICATION STATE AND DATA ---
+        
+        // Global array to store the IDs of the currently selected areas
+        const selectedAreaIds = []; 
+        
+        // Single color and new opacity settings
+        const AREA_COLOR = "#FFC600"; // Bright Gold/Amber
+        const DEFAULT_OPACITY = 0.20; // Lightly visible when unselected
+        const SELECTED_OPACITY = 0.60; // Much darker when selected
+
+        // Coordinate data for the Polygons (Areas) - Data remains the same
+        const multiAreaCoordinates = [
+            [
+    {
+        lng: 35.923805,
+        lat: 32.56684
+    },
+    {
+        lng: 35.92861,
+        lat: 32.614277
+    },
+    {
+        lng: 35.82836,
+        lat: 32.616592
+    },
+    {
+        lng: 35.741158,
+        lat: 32.567417
+    },
+    {
+        lng: 35.789223,
+        lat: 32.48347
+    },
+    {
+        lng: 35.877113,
+        lat: 32.47652
+    },
+    {
+        lng: 35.943718,
+        lat: 32.519955
+    }
+],
+            [
+                {lng: 35.859604, lat: 32.546604}, 
+                {lng: 35.853855, lat: 32.547977},
+                {lng: 35.845528, lat: 32.545662},
+            ],
+            [
+                {lng: 35.84793, lat: 32.536762},
+                {lng: 35.86235, lat: 32.537632},
+                {lng: 35.803986, lat: 32.526318},
+                {lng: 35.83351, lat: 32.456818},
+            ],
+            [
+                {lng: 35.72159, lat: 32.481728},
+                {lng: 35.76004, lat: 32.53037},
+                {lng: 35.779953, lat: 32.455082},
+                {lng: 35.70000, lat: 32.460000},
+            ]
+        ];
+        
+        // Metadata for each area - Color property is no longer used in Polygon creation
+        const areasData = [
+            { id: "ZONE_A", name: "Northern District", content: "Primary coverage area." },
+            { id: "ZONE_B", name: "Southern Zone", content: "Water testing scheduled." },
+            { id: "ZONE_C", name: "Western Region", content: "High density commercial." },
+        ];
+
+        // --- CORE SELECTION LOGIC (The function that returns the list) ---
+
+        /**
+         * Toggles the selection state of an area, updates its style, and returns 
+         * the full, current array of selected IDs.
+         */
+        function handleAreaSelection(areaId, areaObject) {
+            const indexInSelectedList = selectedAreaIds.indexOf(areaId);
+            
+            if (indexInSelectedList > -1) {
+                // UNSELECT
+                selectedAreaIds.splice(indexInSelectedList, 1);
+                areaObject.setOptions({ fillOpacity: DEFAULT_OPACITY });
+            } else {
+                // SELECT
+                selectedAreaIds.push(areaId);
+                areaObject.setOptions({ fillOpacity: SELECTED_OPACITY });
+            }
+
+            // Returns the complete array of selected IDs
+            return selectedAreaIds;
+        }
+
+        // Helper function to update the HTML display
+        function updateSelectedListDisplay(selectedIds) {
+            const displayElement = document.getElementById("selected-list");
+            displayElement.textContent = selectedIds.length > 0 
+                ? selectedIds.join(', ') 
+                : 'None';
+        }
+
+        // --- GOOGLE MAPS INITIALIZATION ---
+
+        function initMap() {
+            const allCoordinates = multiAreaCoordinates.flat(); 
+
+            const map = new google.maps.Map(document.getElementById("map"), {
+                center: allCoordinates[0],
+                zoom: 10,
+                mapTypeId: 'roadmap',
+            });
+            
+            const infoWindow = new google.maps.InfoWindow();
+            const bounds = new google.maps.LatLngBounds();
+
+            // Loop through the areas
+            multiAreaCoordinates.forEach((areaPath, index) => {
+                const data = areasData[index % areasData.length];
+
+                // 3. Create the Polygon object
+                const area = new google.maps.Polygon({
+                    paths: areaPath,
+                    strokeColor: "#000000",
+                    strokeOpacity: 0.8,
+                    strokeWeight: 2,
+                    fillColor: AREA_COLOR,     // Use the single specified color
+                    fillOpacity: DEFAULT_OPACITY, // Start with default opacity
+                });
+
+                area.setMap(map);
+                
+                // Attach the click listener
+                area.addListener('click', (event) => {
+                    const areaId = data.id;
+
+                    // CALL THE CALLBACK FUNCTION and capture the full list of selected IDs
+                    const currentlySelected = handleAreaSelection(areaId, area);
+                    
+                    // PRINT THE LIST TO THE CONSOLE
+                    console.log('Current Selected Areas:', currentlySelected);
+
+                    // Update the HTML display
+                    updateSelectedListDisplay(currentlySelected);
+
+                    // Optional: Show InfoWindow
+                    infoWindow.setContent(`
+                        <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${areaId})</div>
+                        <div>${data.content}</div>
+                        <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${currentlySelected.length}</div>
+                    `);
+                    infoWindow.setPosition(event.latLng);
+                    infoWindow.open(map);
+                });
+
+                areaPath.forEach(coord => {
+                    bounds.extend(coord);
+                });
+            });
+
+            map.fitBounds(bounds);
+        }
+    </script>
+
+    <script async
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVJ8t5ZLQDnGUIP13h_9oYV58e66Cg_bw&callback=initMap">
+    </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
     <title>Map with Selectable Polygons - Single Color</title>
     <style>
-        /* Essential to make the map fill the container */
+        /* Essential styles remain the same */
         html, body {
             height: 100%;
             margin: 0;
@@ -39,80 +39,36 @@
     </div>
 
     <script>
-        // --- APPLICATION STATE AND DATA ---
+        // --- APPLICATION STATE AND DATA (GLOBAL PLACEHOLDERS) ---
         
-        // Global array to store the IDs of the currently selected areas
         const selectedAreaIds = []; 
+        let currentMapData = null; // Will store data passed from RN
         
         // Single color and new opacity settings
-        const AREA_COLOR = "#FFC600"; // Bright Gold/Amber
-        const DEFAULT_OPACITY = 0.20; // Lightly visible when unselected
-        const SELECTED_OPACITY = 0.60; // Much darker when selected
-
-        // Coordinate data for the Polygons (Areas) - Data remains the same
-        const multiAreaCoordinates = [
-            [
-    {
-        lng: 35.923805,
-        lat: 32.56684
-    },
-    {
-        lng: 35.92861,
-        lat: 32.614277
-    },
-    {
-        lng: 35.82836,
-        lat: 32.616592
-    },
-    {
-        lng: 35.741158,
-        lat: 32.567417
-    },
-    {
-        lng: 35.789223,
-        lat: 32.48347
-    },
-    {
-        lng: 35.877113,
-        lat: 32.47652
-    },
-    {
-        lng: 35.943718,
-        lat: 32.519955
-    }
-],
-            [
-                {lng: 35.859604, lat: 32.546604}, 
-                {lng: 35.853855, lat: 32.547977},
-                {lng: 35.845528, lat: 32.545662},
-            ],
-            [
-                {lng: 35.84793, lat: 32.536762},
-                {lng: 35.86235, lat: 32.537632},
-                {lng: 35.803986, lat: 32.526318},
-                {lng: 35.83351, lat: 32.456818},
-            ],
-            [
-                {lng: 35.72159, lat: 32.481728},
-                {lng: 35.76004, lat: 32.53037},
-                {lng: 35.779953, lat: 32.455082},
-                {lng: 35.70000, lat: 32.460000},
-            ]
-        ];
+        const AREA_COLOR = "#FFC600";
+        const DEFAULT_OPACITY = 0.20;
+        const SELECTED_OPACITY = 0.60;
         
-        // Metadata for each area - Color property is no longer used in Polygon creation
-        const areasData = [
-            { id: "ZONE_A", name: "Northern District", content: "Primary coverage area." },
-            { id: "ZONE_B", name: "Southern Zone", content: "Water testing scheduled." },
-            { id: "ZONE_C", name: "Western Region", content: "High density commercial." },
-        ];
+        // --- DATA RETRIEVAL FROM URL PARAMETERS (NEW FUNCTION) ---
 
-        // --- CORE SELECTION LOGIC (The function that returns the list) ---
+        function getMapDataFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const dataString = params.get('data');
+            
+            if (dataString) {
+                try {
+                    // Data is passed as a URL-encoded JSON string
+                    return JSON.parse(decodeURIComponent(dataString));
+                } catch (e) {
+                    console.error("Error parsing map data from URL:", e);
+                    return null;
+                }
+            }
+            return null;
+        }
 
-        /**
-         * Toggles the selection state of an area, updates its style, and returns 
-         * the full, current array of selected IDs.
-         */
+        // --- CORE SELECTION LOGIC (MODIFIED TO SEND MESSAGE BACK) ---
+
         function handleAreaSelection(areaId, areaObject) {
             const indexInSelectedList = selectedAreaIds.indexOf(areaId);
             
@@ -125,8 +81,15 @@
                 selectedAreaIds.push(areaId);
                 areaObject.setOptions({ fillOpacity: SELECTED_OPACITY });
             }
+            
+            // ⭐️ NEW: Send the updated array of selected IDs back to React Native
+            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'selection_change',
+                    data: selectedAreaIds
+                }));
+            }
 
-            // Returns the complete array of selected IDs
             return selectedAreaIds;
         }
 
@@ -138,12 +101,24 @@
                 : 'None';
         }
 
-        // --- GOOGLE MAPS INITIALIZATION ---
+        // --- GOOGLE MAPS INITIALIZATION (MODIFIED TO USE PASSED DATA) ---
 
         function initMap() {
+            // 1. Get the data that was passed from React Native
+            const mapData = currentMapData; 
+
+            if (!mapData || !mapData.multiAreaCoordinates || mapData.multiAreaCoordinates.length === 0) {
+                console.error("Map initialization failed: No valid coordinate data.");
+                return;
+            }
+
+            const multiAreaCoordinates = mapData.multiAreaCoordinates;
+            const areasData = mapData.areasData;
+
             const allCoordinates = multiAreaCoordinates.flat(); 
 
             const map = new google.maps.Map(document.getElementById("map"), {
+                // Use first valid coordinate for centering
                 center: allCoordinates[0],
                 zoom: 10,
                 mapTypeId: 'roadmap',
@@ -156,36 +131,28 @@
             multiAreaCoordinates.forEach((areaPath, index) => {
                 const data = areasData[index % areasData.length];
 
-                // 3. Create the Polygon object
+                // 2. Create the Polygon object
                 const area = new google.maps.Polygon({
-                    paths: areaPath,
+                    // paths property expects an array of LatLng objects/literals
+                    paths: areaPath.map(c => ({ lat: c.lat, lng: c.lng })),
                     strokeColor: "#000000",
                     strokeOpacity: 0.8,
                     strokeWeight: 2,
-                    fillColor: AREA_COLOR,     // Use the single specified color
-                    fillOpacity: DEFAULT_OPACITY, // Start with default opacity
+                    fillColor: AREA_COLOR,     
+                    fillOpacity: DEFAULT_OPACITY,
                 });
 
                 area.setMap(map);
                 
                 // Attach the click listener
                 area.addListener('click', (event) => {
-                    const areaId = data.id;
-
-                    // CALL THE CALLBACK FUNCTION and capture the full list of selected IDs
-                    const currentlySelected = handleAreaSelection(areaId, area);
+                    handleAreaSelection(data.id, area);
                     
-                    // PRINT THE LIST TO THE CONSOLE
-                    console.log('Current Selected Areas:', currentlySelected);
-
-                    // Update the HTML display
-                    updateSelectedListDisplay(currentlySelected);
-
                     // Optional: Show InfoWindow
                     infoWindow.setContent(`
-                        <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${areaId})</div>
+                        <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${data.id})</div>
                         <div>${data.content}</div>
-                        <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${currentlySelected.length}</div>
+                        <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${selectedAreaIds.length}</div>
                     `);
                     infoWindow.setPosition(event.latLng);
                     infoWindow.open(map);
@@ -198,10 +165,19 @@
 
             map.fitBounds(bounds);
         }
+
+        // ⭐️ NEW: ENTRY POINT - Call initMap only after we have the data
+        // This function is the callback for the Google Maps script load
+        function onGoogleMapsApiLoad() {
+            currentMapData = getMapDataFromUrl();
+            if (currentMapData) {
+                initMap();
+            }
+        }
     </script>
 
     <script async
-        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVJ8t5ZLQDnGUIP13h_9oYV58e66Cg_bw&callback=initMap">
+        src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBVJ8t5ZLQDnGUIP13h_9oYV58e66Cg_bw&callback=onGoogleMapsApiLoad">
     </script>
 </body>
 </html>

@@ -44,7 +44,11 @@
         const selectedAreaIds = []; 
         let currentMapData = null; // Will store data passed from RN via postMessage
         let mapInitialized = false; // Flag to prevent re-initialization
-        let googleApiLoaded = false; // ⭐️ NEW: Flag to track API script status
+        let googleApiLoaded = false; // Flag to track API script status
+
+        // ⭐️ Default center coordinates (e.g., center of Jordan, Amman)
+        const DEFAULT_MAP_CENTER = { lat: 31.9566, lng: 35.9456 }; 
+        const DEFAULT_MAP_ZOOM = 6;
         
         // Single color and new opacity settings
         const AREA_COLOR = "#FFC600";
@@ -57,16 +61,13 @@
             const indexInSelectedList = selectedAreaIds.indexOf(areaId);
             
             if (indexInSelectedList > -1) {
-                // UNSELECT
                 selectedAreaIds.splice(indexInSelectedList, 1);
                 areaObject.setOptions({ fillOpacity: DEFAULT_OPACITY });
             } else {
-                // SELECT
                 selectedAreaIds.push(areaId);
                 areaObject.setOptions({ fillOpacity: SELECTED_OPACITY });
             }
             
-            // Send the updated array of selected IDs back to React Native
             if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({
                     type: 'selection_change',
@@ -74,13 +75,10 @@
                 }));
             }
 
-            // Update the local HTML display
             updateSelectedListDisplay(selectedAreaIds);
-
             return selectedAreaIds;
         }
 
-        // Helper function to update the HTML display
         function updateSelectedListDisplay(selectedIds) {
             const displayElement = document.getElementById("selected-list");
             displayElement.textContent = selectedIds.length > 0 
@@ -88,88 +86,102 @@
                 : 'None';
         }
 
-        // --- GOOGLE MAPS INITIALIZATION ---
+        // --- GOOGLE MAPS INITIALIZATION (MODIFIED) ---
 
         function initMap() {
             if (mapInitialized) return;
             
-            // ⭐️ SYNCHRONIZATION CHECK: Only proceed if both data and API are ready
-            if (!googleApiLoaded || !currentMapData) {
-                // This means the map will be initialized later when the other piece arrives
+            // SYNCHRONIZATION CHECK
+            if (!googleApiLoaded) {
+                // If API isn't ready, initialization will be re-attempted when it loads
                 return;
             }
 
-            const mapData = currentMapData; 
-
-            if (!mapData || !mapData.multiAreaCoordinates || mapData.multiAreaCoordinates.length === 0) {
-                console.error("Map initialization failed: No valid coordinate data.");
-                return;
-            }
-
-            const multiAreaCoordinates = mapData.multiAreaCoordinates;
-            const areasData = mapData.areasData;
-
-            const allCoordinates = multiAreaCoordinates.flat(); 
-
-            // Safety check for centering
-            if (allCoordinates.length === 0) {
-                 console.error("No coordinates found to center map.");
-                 return;
-            }
-
-            const map = new google.maps.Map(document.getElementById("map"), {
-                // Use first valid coordinate for centering
-                center: { lat: allCoordinates[0].lat, lng: allCoordinates[0].lng },
-                zoom: 10,
-                mapTypeId: 'roadmap',
-            });
+            const hasPolygons = currentMapData && 
+                               currentMapData.multiAreaCoordinates && 
+                               currentMapData.multiAreaCoordinates.length > 0;
             
-            const infoWindow = new google.maps.InfoWindow();
-            const bounds = new google.maps.LatLngBounds();
-
-            // Loop through the areas
-            multiAreaCoordinates.forEach((areaPath, index) => {
-                // Use modulo in case areaPath has more elements than areasData (shouldn't happen with correct data transformation)
-                const data = areasData[index % areasData.length];
-
-                // 2. Create the Polygon object
-                const area = new google.maps.Polygon({
-                    // paths property expects an array of LatLng objects/literals
-                    paths: areaPath.map(c => ({ lat: c.lat, lng: c.lng })),
-                    strokeColor: "#000000",
-                    strokeOpacity: 0.8,
-                    strokeWeight: 2,
-                    fillColor: AREA_COLOR,     
-                    fillOpacity: DEFAULT_OPACITY,
-                });
-
-                area.setMap(map);
+            let center = DEFAULT_MAP_CENTER;
+            let zoom = DEFAULT_MAP_ZOOM;
+            let bounds = new google.maps.LatLngBounds();
+            
+            // ⭐️ LOGIC FOR MAP DISPLAY WITH/WITHOUT DATA
+            if (hasPolygons) {
+                console.log("Map initializing with polygons.");
                 
-                // Attach the click listener
-                area.addListener('click', (event) => {
-                    handleAreaSelection(data.id, area);
+                const multiAreaCoordinates = currentMapData.multiAreaCoordinates;
+                const areasData = currentMapData.areasData;
+                const allCoordinates = multiAreaCoordinates.flat(); 
+
+                // Determine center from first coordinate
+                if (allCoordinates.length > 0) {
+                     center = { lat: allCoordinates[0].lat, lng: allCoordinates[0].lng };
+                     zoom = 10; // Zoom closer when polygons are present
+                }
+
+
+                // Initialize map object with the determined center/zoom
+                const map = new google.maps.Map(document.getElementById("map"), {
+                    center: center,
+                    zoom: zoom,
+                    mapTypeId: 'roadmap',
+                });
+                
+                const infoWindow = new google.maps.InfoWindow();
+
+                // Loop and DRAW Polygons
+                multiAreaCoordinates.forEach((areaPath, index) => {
+                    const data = areasData[index % areasData.length];
+
+                    const area = new google.maps.Polygon({
+                        paths: areaPath.map(c => ({ lat: c.lat, lng: c.lng })),
+                        strokeColor: "#000000",
+                        strokeOpacity: 0.8,
+                        strokeWeight: 2,
+                        fillColor: AREA_COLOR,     
+                        fillOpacity: DEFAULT_OPACITY,
+                    });
+
+                    area.setMap(map);
                     
-                    // Optional: Show InfoWindow
-                    infoWindow.setContent(`
-                        <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${data.id})</div>
-                        <div>${data.content}</div>
-                        <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${selectedAreaIds.length}</div>
-                    `);
-                    infoWindow.setPosition(event.latLng);
-                    infoWindow.open(map);
-                });
+                    area.addListener('click', (event) => {
+                        handleAreaSelection(data.id, area);
+                        
+                        infoWindow.setContent(`
+                            <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${data.id})</div>
+                            <div>${data.content}</div>
+                            <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${selectedAreaIds.length}</div>
+                        `);
+                        infoWindow.setPosition(event.latLng);
+                        infoWindow.open(map);
+                    });
 
-                areaPath.forEach(coord => {
-                    bounds.extend(coord);
+                    areaPath.forEach(coord => {
+                        bounds.extend(coord);
+                    });
                 });
-            });
+                
+                // Fit bounds to show all polygons
+                map.fitBounds(bounds); 
 
-            map.fitBounds(bounds);
-            mapInitialized = true; // Set flag after successful initialization
+            } else {
+                 // ⭐️ FALLBACK: Initialize map with default center/zoom if no data
+                console.log("Map initializing without polygons (No data received).");
+                new google.maps.Map(document.getElementById("map"), {
+                    center: DEFAULT_MAP_CENTER,
+                    zoom: DEFAULT_MAP_ZOOM, 
+                    mapTypeId: 'roadmap',
+                });
+                
+                const displayElement = document.getElementById("selected-list");
+                displayElement.textContent = 'No map data received.';
+            }
+
+            mapInitialized = true;
             console.log("Map initialized successfully!");
         }
 
-        // ⭐️ NEW ENTRY POINT: Listens for data from React Native
+        // --- DATA LISTENER ---
         window.addEventListener('message', (event) => {
             try {
                 const message = JSON.parse(event.data);
@@ -177,7 +189,6 @@
                 if (message.type === 'initial_data' && message.data) {
                     currentMapData = message.data;
                     console.log("Data received. Checking API status...");
-                    // If Google API is already loaded, initialize the map
                     if (googleApiLoaded) { 
                         initMap();
                     }
@@ -187,15 +198,13 @@
             }
         });
 
-        // ⭐️ UPDATED: Google Maps API Callback
+        // --- API CALLBACK ---
         function onGoogleMapsApiLoad() {
-            googleApiLoaded = true; // Set the flag indicating the API script has loaded
+            googleApiLoaded = true;
             console.log("Google Maps API script loaded. Checking data status...");
             
-            // If data has already been received, initialize the map
-            if (currentMapData) { 
-                initMap();
-            }
+            // Attempt to initialize map regardless of whether data is present
+            initMap();
         }
     </script>
 

@@ -1,7 +1,36 @@
 <!DOCTYPE html>
 <html>
 <head>
-    </head>
+    <title>Map with Selectable Polygons - PostMessage Data</title>
+    <style>
+        /* Essential styles remain the same */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+        /* Style for the overlay display */
+        #status-overlay {
+            position: absolute; 
+            top: 10px; 
+            left: 10px; 
+            background: white; 
+            padding: 10px; 
+            border: 1px solid #ccc; 
+            z-index: 100;
+            font-family: Arial, sans-serif;
+            border-radius: 4px;
+        }
+        #selected-list {
+            font-weight: bold;
+            color: #0056b3;
+        }
+    </style>
+</head>
 <body>
     <div id="map"></div>
     
@@ -13,23 +42,26 @@
         // --- APPLICATION STATE AND DATA ---
         
         const selectedAreaIds = []; 
-        let currentMapData = null; // Will store data passed via postMessage
+        let currentMapData = null; // Will store data passed from RN via postMessage
         let mapInitialized = false; // Flag to prevent re-initialization
-
+        let googleApiLoaded = false; // ⭐️ NEW: Flag to track API script status
+        
+        // Single color and new opacity settings
         const AREA_COLOR = "#FFC600";
         const DEFAULT_OPACITY = 0.20;
         const SELECTED_OPACITY = 0.60;
         
-        // ❌ REMOVE: The getMapDataFromUrl function is no longer needed
-
         // --- CORE SELECTION LOGIC (Unchanged) ---
+
         function handleAreaSelection(areaId, areaObject) {
             const indexInSelectedList = selectedAreaIds.indexOf(areaId);
             
             if (indexInSelectedList > -1) {
+                // UNSELECT
                 selectedAreaIds.splice(indexInSelectedList, 1);
                 areaObject.setOptions({ fillOpacity: DEFAULT_OPACITY });
             } else {
+                // SELECT
                 selectedAreaIds.push(areaId);
                 areaObject.setOptions({ fillOpacity: SELECTED_OPACITY });
             }
@@ -41,6 +73,10 @@
                     data: selectedAreaIds
                 }));
             }
+
+            // Update the local HTML display
+            updateSelectedListDisplay(selectedAreaIds);
+
             return selectedAreaIds;
         }
 
@@ -52,9 +88,16 @@
                 : 'None';
         }
 
-        // --- GOOGLE MAPS INITIALIZATION (Uses currentMapData) ---
+        // --- GOOGLE MAPS INITIALIZATION ---
+
         function initMap() {
             if (mapInitialized) return;
+            
+            // ⭐️ SYNCHRONIZATION CHECK: Only proceed if both data and API are ready
+            if (!googleApiLoaded || !currentMapData) {
+                // This means the map will be initialized later when the other piece arrives
+                return;
+            }
 
             const mapData = currentMapData; 
 
@@ -65,16 +108,18 @@
 
             const multiAreaCoordinates = mapData.multiAreaCoordinates;
             const areasData = mapData.areasData;
+
             const allCoordinates = multiAreaCoordinates.flat(); 
-            
-            // Safety check for empty data to prevent crash
+
+            // Safety check for centering
             if (allCoordinates.length === 0) {
                  console.error("No coordinates found to center map.");
                  return;
             }
 
             const map = new google.maps.Map(document.getElementById("map"), {
-                center: allCoordinates[0],
+                // Use first valid coordinate for centering
+                center: { lat: allCoordinates[0].lat, lng: allCoordinates[0].lng },
                 zoom: 10,
                 mapTypeId: 'roadmap',
             });
@@ -82,10 +127,14 @@
             const infoWindow = new google.maps.InfoWindow();
             const bounds = new google.maps.LatLngBounds();
 
+            // Loop through the areas
             multiAreaCoordinates.forEach((areaPath, index) => {
+                // Use modulo in case areaPath has more elements than areasData (shouldn't happen with correct data transformation)
                 const data = areasData[index % areasData.length];
 
+                // 2. Create the Polygon object
                 const area = new google.maps.Polygon({
+                    // paths property expects an array of LatLng objects/literals
                     paths: areaPath.map(c => ({ lat: c.lat, lng: c.lng })),
                     strokeColor: "#000000",
                     strokeOpacity: 0.8,
@@ -96,10 +145,16 @@
 
                 area.setMap(map);
                 
+                // Attach the click listener
                 area.addListener('click', (event) => {
                     handleAreaSelection(data.id, area);
                     
-                    infoWindow.setContent(`... (Infowindow content remains the same) ...`);
+                    // Optional: Show InfoWindow
+                    infoWindow.setContent(`
+                        <div style="font-weight: bold; color: ${AREA_COLOR};">${data.name} (ID: ${data.id})</div>
+                        <div>${data.content}</div>
+                        <div style="font-size: smaller; margin-top: 5px;">Total Selected: ${selectedAreaIds.length}</div>
+                    `);
                     infoWindow.setPosition(event.latLng);
                     infoWindow.open(map);
                 });
@@ -111,24 +166,20 @@
 
             map.fitBounds(bounds);
             mapInitialized = true; // Set flag after successful initialization
-            console.log("Map initialized with data passed via postMessage.");
+            console.log("Map initialized successfully!");
         }
 
         // ⭐️ NEW ENTRY POINT: Listens for data from React Native
         window.addEventListener('message', (event) => {
             try {
-                // Ensure the message is from a trusted source, or specifically your RN app
-                // For local WebView use, this is usually fine, but be careful in production!
                 const message = JSON.parse(event.data);
                 
                 if (message.type === 'initial_data' && message.data) {
                     currentMapData = message.data;
-                    // Check if Google Maps API is ready (window.google exists)
-                    if (window.google) {
+                    console.log("Data received. Checking API status...");
+                    // If Google API is already loaded, initialize the map
+                    if (googleApiLoaded) { 
                         initMap();
-                    } else {
-                        // Wait for Google Maps API to load via the callback
-                        console.log("Data received, waiting for Google Maps API to load...");
                     }
                 }
             } catch (e) {
@@ -136,12 +187,13 @@
             }
         });
 
-
-        // Define the callback function for the Google Maps API script load
-        // This handles cases where the API loads before the message is received
+        // ⭐️ UPDATED: Google Maps API Callback
         function onGoogleMapsApiLoad() {
-             // If data has already been received, initialize the map now
-            if (currentMapData) {
+            googleApiLoaded = true; // Set the flag indicating the API script has loaded
+            console.log("Google Maps API script loaded. Checking data status...");
+            
+            // If data has already been received, initialize the map
+            if (currentMapData) { 
                 initMap();
             }
         }
